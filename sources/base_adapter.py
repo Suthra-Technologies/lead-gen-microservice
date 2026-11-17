@@ -5,6 +5,7 @@ Every registered discussion source implements this contract to enforce platform-
 URL filtering, category discovery, thread identification, pagination, and date extraction.
 """
 
+import hashlib
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple, Optional, Any
 from urllib.parse import urlparse
@@ -114,4 +115,56 @@ class BaseSourceAdapter(ABC):
             "latest_thread_activity_at": thread_data.get("latest_reply_at"),
             "last_buyer_intent_at": thread_data.get("published_at")
         }
+
+    def extract_posts(self, soup: BeautifulSoup, url: str) -> List[Dict[str, Any]]:
+        """
+        Extracts individual discussion posts (OP and subsequent replies)
+        with structured post-level metadata for granular storage and independent lead evaluation.
+        """
+        thread_data = self.extract_thread_data(soup, url)
+        posts = []
+        title = thread_data.get("title", "")
+        main_content = thread_data.get("main_content", "")
+        author = thread_data.get("author", "Anonymous")
+        published_at = thread_data.get("published_at")
+        location_raw = thread_data.get("location_raw")
+
+        if main_content or title:
+            post_id = f"{self.source_id}_op_{hashlib.md5(f'{url}_op'.encode('utf-8')).hexdigest()[:12]}"
+            posts.append({
+                "post_id": post_id,
+                "thread_url": url,
+                "source_name": self.name,
+                "thread_title": title,
+                "author_name": author,
+                "post_text": main_content,
+                "post_order": 0,
+                "is_original_post": True,
+                "posted_at": published_at,
+                "reply_count": len(thread_data.get("replies", [])),
+                "location_text": location_raw,
+                "last_activity_at": thread_data.get("latest_reply_at") or published_at
+            })
+
+        replies = thread_data.get("replies", [])
+        for idx, rep in enumerate(replies, start=1):
+            if not rep:
+                continue
+            rep_id = f"{self.source_id}_rep_{hashlib.md5(f'{url}_{idx}_{rep[:50]}'.encode('utf-8')).hexdigest()[:12]}"
+            posts.append({
+                "post_id": rep_id,
+                "thread_url": url,
+                "source_name": self.name,
+                "thread_title": title,
+                "author_name": f"{author}_reply_{idx}",
+                "post_text": rep,
+                "post_order": idx,
+                "is_original_post": False,
+                "posted_at": thread_data.get("latest_reply_at") or published_at,
+                "reply_count": len(replies),
+                "location_text": location_raw,
+                "last_activity_at": thread_data.get("latest_reply_at")
+            })
+
+        return posts
 

@@ -1072,6 +1072,23 @@ class ContentParser:
             if post_url:
                 outbound_links.add(post_url)
 
+            # Persist individual Reddit post record
+            import hashlib
+            post_id = f"reddit_{hashlib.md5(post_url.encode('utf-8')).hexdigest()[:14]}"
+            self.storage.save_discussion_post({
+                "post_id": post_id,
+                "thread_url": post_url,
+                "source_name": self._determine_source_name(source_url),
+                "thread_title": title,
+                "author_name": author,
+                "post_text": selftext or title,
+                "post_order": 0,
+                "is_original_post": True,
+                "posted_at": None,
+                "reply_count": 0,
+                "last_activity_at": None
+            })
+
             combined_text = f"{title}\n{selftext}"
             classification, class_reasons = self.classify_content(title, selftext)
 
@@ -1172,24 +1189,6 @@ class ContentParser:
         title = soup.title.string.strip() if soup.title and soup.title.string else ""
         visible_text = self._extract_clean_text(html, soup)
 
-        # Content Deduplication (Atomic & Concurrency-Safe)
-        exact_hash = Deduplicator.hash_content_exact(visible_text)
-        simhash = Deduplicator.compute_simhash(visible_text)
-
-        # Atomic insert eliminates race condition between concurrent parser workers
-        is_new_exact = self.storage.save_content_hash_atomic(exact_hash, simhash, url, title)
-        if not is_new_exact:
-            logger.info(f"[Parser Discarded] Exact duplicate content hash (atomic): {url}")
-            self.storage.update_source_metrics(domain=domain, pages_downloaded=1, leads_found=0, duplicates=1)
-            return {"is_duplicate": True, "duplicate_type": "exact", "outbound_links": [], "solar_lead": None}
-
-        near_duplicate = self.storage.check_near_duplicate_simhash(simhash, max_hamming_distance=3)
-        if near_duplicate:
-            dup_url, dist = near_duplicate
-            logger.info(f"[Parser Discarded] Near-duplicate of {dup_url} (Hamming Dist: {dist}): {url}")
-            self.storage.update_source_metrics(domain=domain, pages_downloaded=1, leads_found=0, duplicates=1)
-            return {"is_duplicate": True, "duplicate_type": "simhash", "outbound_links": [], "solar_lead": None}
-
         # Determine thread vs index page
         is_discussion = self._is_discussion_thread(url)
         solar_lead = None
@@ -1197,9 +1196,67 @@ class ContentParser:
         classification = "INDEX_PAGE"
         class_reasons = ["Category or forum index"]
 
+        # Content Deduplication (Atomic, Concurrency-Safe & Self-Match Immune)
+        exact_hash = Deduplicator.hash_content_exact(visible_text)
+        simhash = Deduplicator.compute_simhash(visible_text)
+
+        # 1. Exact Duplicate Detection
+        matched_exact_url = self.storage.get_exact_content_match(exact_hash, exclude_url=url)
+        if matched_exact_url:
+            if is_discussion:
+                diag = Deduplicator.format_duplicate_diagnostic(
+                    current_url=url,
+                    matched_url=matched_exact_url,
+                    current_len=len(visible_text),
+                    matched_len=len(visible_text),
+                    current_hash=exact_hash,
+                    matched_hash=exact_hash,
+                    simhash_distance=0,
+                    reason="Exact content SHA-256 hash match"
+                )
+                logger.info(diag)
+                self.storage.update_source_metrics(domain=domain, pages_downloaded=1, leads_found=0, duplicates=1)
+                return {"is_duplicate": True, "duplicate_type": "exact", "outbound_links": [], "solar_lead": None}
+            else:
+                logger.info(f"[Parser Category Refresh] Category content hash unchanged for {url}; continuing link harvesting.")
+
+        # 2. Near-Duplicate SimHash Detection (Explicitly excludes self to prevent self-matching)
+        near_duplicate = self.storage.check_near_duplicate_simhash(simhash, max_hamming_distance=3, exclude_url=url)
+        if near_duplicate:
+            dup_url, dist, matched_hash = near_duplicate
+            if is_discussion:
+                diag = Deduplicator.format_duplicate_diagnostic(
+                    current_url=url,
+                    matched_url=dup_url,
+                    current_len=len(visible_text),
+                    matched_len=-1,
+                    current_hash=exact_hash,
+                    matched_hash=matched_hash,
+                    simhash_distance=dist,
+                    reason=f"SimHash near-duplicate within Hamming distance {dist}"
+                )
+                logger.info(diag)
+                self.storage.update_source_metrics(domain=domain, pages_downloaded=1, leads_found=0, duplicates=1)
+                return {"is_duplicate": True, "duplicate_type": "simhash", "outbound_links": [], "solar_lead": None}
+            else:
+                logger.info(f"[Parser Category Refresh] Category SimHash match for {url}; continuing link harvesting.")
+
+        # 3. Store content hash atomically now that duplicate checks have cleared
+        self.storage.save_content_hash_atomic(exact_hash, simhash, url, title)
+
         if not is_discussion:
             logger.info(f"[Parser Info] Link harvesting on Category/Index page (Lead scoring bypassed): {url}")
         else:
+            # Task 4: Extract and persist individual discussion posts independently
+            thread_posts = adapter.extract_posts(soup, url)
+            new_posts_count = 0
+            for post in thread_posts:
+                if self.storage.save_discussion_post(post):
+                    new_posts_count += 1
+
+            if new_posts_count > 0:
+                logger.debug(f"[Parser Posts] Saved {new_posts_count} new posts for thread {url}")
+
             # 10-Way Content Classification
             classification, class_reasons = self.classify_content(title, visible_text)
             logger.debug(f"[Parser Classify] {url} -> {classification} ({class_reasons})")

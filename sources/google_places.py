@@ -118,6 +118,9 @@ class GooglePlacesSource:
                 type_obj = item.get("primaryTypeDisplayName", {})
                 primary_type = type_obj.get("text") if isinstance(type_obj, dict) else None
 
+                # Business categorization to separate installers from cleaners, screens, and roofing
+                classification = self.classify_business(company_name, primary_type, query)
+
                 record = {
                     "place_id": place_id,
                     "company_name": company_name,
@@ -132,7 +135,13 @@ class GooglePlacesSource:
                     "user_ratings_total": user_ratings_total,
                     "business_status": business_status,
                     "primary_type": primary_type,
-                    "search_query": query
+                    "search_query": query,
+                    "business_category": classification["business_category"],
+                    "services_offered": classification["services_offered"],
+                    "residential_service": classification["residential_service"],
+                    "commercial_service": classification["commercial_service"],
+                    "license_verification_status": "UNVERIFIED",
+                    "verification_source": "places_discovered"
                 }
                 results.append(record)
 
@@ -141,6 +150,77 @@ class GooglePlacesSource:
         except Exception as e:
             logger.error(f"[Google Places Exception] {query}: {e}", exc_info=True)
             return []
+
+    @staticmethod
+    def classify_business(name: str, primary_type: Optional[str] = None, query: str = "") -> Dict[str, Any]:
+        """
+        Classifies discovered businesses into distinct categories to prevent non-installers
+        (solar cleaners, sunscreens, roofing-only, general tinting) from being treated
+        as residential installation contractors.
+        """
+        combined = f"{name} {primary_type or ''} {query}".lower()
+
+        # 1. Non-solar screens / window film / sun control
+        if any(term in combined for term in ["screen", "screens", "sunscreen", "solar screen", "window tint", "tinting", "shading"]):
+            return {
+                "business_category": "Non-Solar Screens/Lighting",
+                "residential_service": False,
+                "commercial_service": False,
+                "services_offered": "Window tinting, sun screens, shading"
+            }
+
+        # 2. Solar panel cleaning / washing
+        if any(term in combined for term in ["cleaning", "clean", "wash", "panel cleaning", "pressure wash", "bird proofing"]):
+            return {
+                "business_category": "Cleaning Service",
+                "residential_service": True,
+                "commercial_service": False,
+                "services_offered": "Solar panel cleaning, bird proofing, washing"
+            }
+
+        # 3. Solar panel repair / maintenance
+        if any(term in combined for term in ["repair", "service and repair", "inverter repair", "troubleshooting", "maintenance"]):
+            return {
+                "business_category": "Repair Service",
+                "residential_service": True,
+                "commercial_service": False,
+                "services_offered": "Inverter replacement, wiring repair, solar maintenance"
+            }
+
+        # 4. Solar battery / storage specialist
+        if any(term in combined for term in ["battery", "storage systems", "powerwall", "enphase storage"]):
+            return {
+                "business_category": "Battery Specialist",
+                "residential_service": True,
+                "commercial_service": False,
+                "services_offered": "Home battery backup, energy storage systems"
+            }
+
+        # 5. Solar roofing
+        if any(term in combined for term in ["roofing and solar", "solar roofing", "roof and solar"]):
+            return {
+                "business_category": "Roofing/Solar",
+                "residential_service": True,
+                "commercial_service": False,
+                "services_offered": "Rooftop replacement, integrated solar roofing"
+            }
+
+        # 6. Commercial solar only
+        if any(term in combined for term in ["commercial solar", "utility scale", "industrial solar", "solar farm"]):
+            return {
+                "business_category": "Commercial Installer",
+                "residential_service": False,
+                "commercial_service": True,
+                "services_offered": "Commercial and utility-scale solar development"
+            }
+
+        # Default: Residential solar installation
+        return {
+            "business_category": "Installer",
+            "residential_service": True,
+            "commercial_service": False,
+            "services_offered": "Turnkey residential solar PV installation"
+        }
 
     def ingest_and_enrich(self, places: List[Dict[str, Any]]) -> Dict[str, int]:
         """

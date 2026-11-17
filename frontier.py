@@ -171,15 +171,37 @@ class URLFrontier:
         """Checks if URL directly mentions residential solar keywords."""
         return self.get_url_priority(url) >= 2
 
+    @staticmethod
+    def get_revisit_interval_hours(url_type: str) -> float:
+        """
+        Calculates suggested revisit intervals based on URL volatility:
+        - Active forum categories: 4.0 hours (2-6h)
+        - Subcategories & pagination: 6.0 hours (6-12h)
+        - Individual discussion threads: 12.0 hours (12-24h)
+        - General pages: 12.0 hours
+        """
+        if url_type in ("CATEGORY", "CATEGORY_PAGINATION"):
+            return 4.0
+        elif url_type == "SUBCATEGORY":
+            return 6.0
+        elif url_type in ("THREAD", "THREAD_PAGINATION"):
+            return 12.0
+        return 12.0
+
     async def restore_pending_urls(self, limit: int = 5000) -> int:
         """
-        Restores unfinished PENDING URLs from SQLite into in-memory politeness queues,
-        filtering out any that no longer meet allowlist criteria.
+        Restores unfinished PENDING URLs and URLs due for scheduled revisit from SQLite
+        into in-memory politeness queues.
         """
-        pending_list = self.storage.get_pending_urls(limit=limit)
+        eligible_records = self.storage.get_eligible_urls(limit=limit)
         restored = 0
         async with self._lock:
-            for url, domain, depth, url_hash in pending_list:
+            for item in eligible_records:
+                url = item["url"]
+                domain = item["domain"]
+                depth = item["depth"]
+                url_hash = item["url_hash"]
+
                 if url_hash in self._in_memory_hashes:
                     continue
 
@@ -204,7 +226,7 @@ class URLFrontier:
                 restored += 1
 
         if restored > 0:
-            logger.info(f"[Frontier Resume] Restored {restored} filtered PENDING URLs across {len(self.active_domains)} domains.")
+            logger.info(f"[Frontier Resume] Restored {restored} eligible (PENDING / Revisit Due) URLs across {len(self.active_domains)} domains.")
         return restored
 
     async def add_url(
@@ -215,8 +237,8 @@ class URLFrontier:
         discovery_method: str = "crawl"
     ) -> bool:
         """
-        Ingests a candidate URL into the frontier with residential intent prioritization
-        and recursive discovery tracking.
+        Ingests a candidate URL into the frontier with residential intent prioritization,
+        recursive discovery tracking, and revisit schedule enforcement.
         """
         allowed, reason = self.should_crawl(raw_url, depth)
         if not allowed:
@@ -234,14 +256,37 @@ class URLFrontier:
                 self._record_discovery_metric(domain, "duplicate_urls")
                 return False
 
-            existing_status = self.storage.get_url_status(url_hash)
-            if existing_status:
-                self.canonical_duplicates_prevented += 1
-                self._record_discovery_metric(domain, "duplicate_urls")
-                status, code = existing_status
-                if status in ("CRAWLED", "FAILED", "SKIPPED"):
-                    logger.debug(f"[Frontier Skipped] Already visited ({status} HTTP {code}): {canonical_url}")
+            url_record = self.storage.get_url_record(url_hash)
+            if url_record:
+                status = url_record.get("status")
+                next_fetch_str = url_record.get("next_fetch_at")
+                is_due = False
+
+                if next_fetch_str:
+                    try:
+                        from datetime import datetime, timezone
+                        import dateparser
+                        dt_next = dateparser.parse(next_fetch_str)
+                        if dt_next:
+                            if dt_next.tzinfo is None:
+                                dt_next = dt_next.replace(tzinfo=timezone.utc)
+                            is_due = datetime.now(timezone.utc) >= dt_next
+                    except Exception:
+                        is_due = True
+                elif status in ("CRAWLED", "FAILED", "SKIPPED"):
+                    # Record without scheduled next_fetch is eligible for refresh/retry
+                    is_due = True
+
+                if status in ("CRAWLED", "FAILED", "SKIPPED") and not is_due:
+                    self.canonical_duplicates_prevented += 1
+                    self._record_discovery_metric(domain, "duplicate_urls")
+                    logger.debug(
+                        f"[Frontier Skipped] Not due for refresh (Next: {next_fetch_str} | Status: {status}): {canonical_url}"
+                    )
                     return False
+
+                if is_due:
+                    logger.info(f"[Frontier Revisit Eligible] Scheduled refresh due for: {canonical_url}")
 
             self.bloom_filter.add(url_hash)
             priority = self.get_url_priority(canonical_url)
@@ -257,7 +302,7 @@ class URLFrontier:
             elif url_type in ("THREAD_PAGINATION", "CATEGORY_PAGINATION"):
                 self._record_discovery_metric(domain, "pagination_discovered")
 
-            if not existing_status:
+            if not url_record:
                 self.storage.save_new_url(
                     url_hash=url_hash,
                     url=canonical_url,

@@ -6,7 +6,7 @@ including content classification, freshness tiers, buyer stages, and verifiable 
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -141,6 +141,7 @@ class SolarLead(BaseModel):
     buyer_stage: str = Field(default=BuyerStage.UNKNOWN.value)
     matched_keywords: List[str] = Field(default_factory=list)
     evidence_snippets: List[str] = Field(default_factory=list, description="Specific evidence sentences justifying score")
+    structured_evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Granular evidence records with provenance")
     crawled_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("intent_snippet")
@@ -247,6 +248,33 @@ class BusinessContact(BaseModel):
     discovered_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class ContractorCategory(str, Enum):
+    INSTALLER = "Installer"
+    COMMERCIAL_INSTALLER = "Commercial Installer"
+    CLEANING_SERVICE = "Cleaning Service"
+    REPAIR_SERVICE = "Repair Service"
+    REMOVAL_REINSTALL = "Removal/Reinstall Service"
+    BATTERY_SPECIALIST = "Battery Specialist"
+    ROOFING_SOLAR = "Roofing/Solar"
+    NON_SOLAR = "Non-Solar Screens/Lighting"
+
+
+class DiscussionPost(BaseModel):
+    post_id: str = Field(description="Unique identifier for post (e.g. source_id + post number or hash)")
+    thread_url: str = Field(description="URL of parent discussion thread")
+    source_name: str = Field(description="Platform or forum name")
+    thread_title: Optional[str] = Field(default=None)
+    author_name: Optional[str] = Field(default="Anonymous")
+    post_text: str = Field(description="Body content of the post")
+    post_order: int = Field(default=0, description="0 for OP, 1+ for replies")
+    is_original_post: bool = Field(default=True)
+    posted_at: Optional[str] = Field(default=None)
+    reply_count: int = Field(default=0)
+    location_text: Optional[str] = Field(default=None)
+    last_activity_at: Optional[str] = Field(default=None)
+    extracted_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class SolarPlaceLead(BaseModel):
     place_id: str = Field(description="Unique Google Place ID")
     company_name: str = Field(description="Company or contractor name")
@@ -261,6 +289,14 @@ class SolarPlaceLead(BaseModel):
     user_ratings_total: Optional[int] = Field(default=None)
     business_status: Optional[str] = Field(default="OPERATIONAL")
     primary_type: Optional[str] = Field(default=None)
+    business_category: str = Field(default=ContractorCategory.INSTALLER.value)
+    services_offered: Optional[str] = Field(default=None)
+    residential_service: bool = Field(default=True)
+    commercial_service: bool = Field(default=False)
+    license_number: Optional[str] = Field(default=None)
+    license_state: Optional[str] = Field(default=None)
+    license_verification_status: str = Field(default="UNVERIFIED")
+    verification_source: str = Field(default="places_discovered")
     metro_area: Optional[str] = Field(default=None)
     search_query: Optional[str] = Field(default=None)
     crawled_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))

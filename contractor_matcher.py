@@ -38,7 +38,17 @@ class ContractorMatcher:
         lead_state = (lead.get("state") or "").upper().strip()
         cont_state = (contractor.get("state") or "").upper().strip()
 
-        # Hard Eligibility Gate: If state is known for both, they must match
+        # Hard Eligibility Gate 1: Non-installation businesses (e.g. cleaning services, sunscreens)
+        category = contractor.get("business_category")
+        if category in ("Cleaning Service", "Non-Solar Screens/Lighting"):
+            return 0, [f"Disqualified: Ineligible business category '{category}' (not a residential installation contractor)"]
+
+        # Hard Eligibility Gate 2: Operational status
+        business_status = (contractor.get("business_status") or "OPERATIONAL").upper()
+        if business_status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
+            return 0, [f"Disqualified: Contractor business status is {business_status}"]
+
+        # Hard Eligibility Gate 3: If state is known for both, they must match
         if lead_state and cont_state and lead_state != cont_state:
             return 0, [f"Disqualified: State mismatch (Lead: {lead_state}, Contractor: {cont_state})"]
 

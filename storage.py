@@ -9,7 +9,7 @@ import sqlite3
 import json
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from config import DB_PATH, LEADS_DIR
 
@@ -106,6 +106,49 @@ class CrawlerStorage:
                 cursor.execute("ALTER TABLE urls ADD COLUMN discovery_method TEXT;")
             if "priority" not in url_cols:
                 cursor.execute("ALTER TABLE urls ADD COLUMN priority INTEGER DEFAULT 1;")
+            if "first_seen_at" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN first_seen_at TIMESTAMP;")
+            if "last_fetched_at" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN last_fetched_at TIMESTAMP;")
+            if "next_fetch_at" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN next_fetch_at TIMESTAMP;")
+            if "last_status_code" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN last_status_code INTEGER;")
+            if "etag" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN etag TEXT;")
+            if "last_modified" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN last_modified TEXT;")
+            if "content_hash" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN content_hash TEXT;")
+            if "retry_after" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN retry_after TIMESTAMP;")
+            if "fetch_count" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN fetch_count INTEGER DEFAULT 0;")
+            if "revisit_interval_hours" not in url_cols:
+                cursor.execute("ALTER TABLE urls ADD COLUMN revisit_interval_hours REAL DEFAULT 6.0;")
+
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_urls_next_fetch ON urls (next_fetch_at);")
+
+            # Granular Discussion Posts Table (Per-Post Storage & Independent Extraction)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS discussion_posts (
+                    post_id TEXT PRIMARY KEY,
+                    thread_url TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    thread_title TEXT,
+                    author_name TEXT DEFAULT 'Anonymous',
+                    post_text TEXT NOT NULL,
+                    post_order INTEGER DEFAULT 0,
+                    is_original_post BOOLEAN DEFAULT 1,
+                    posted_at TEXT,
+                    reply_count INTEGER DEFAULT 0,
+                    location_text TEXT,
+                    last_activity_at TEXT,
+                    extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_thread ON discussion_posts (thread_url);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_author ON discussion_posts (author_name);")
 
             cursor.execute("PRAGMA table_info(solar_leads);")
             existing_cols = {col["name"] for col in cursor.fetchall()}
@@ -380,6 +423,26 @@ class CrawlerStorage:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_installers_state ON solar_installers (state);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_installers_city ON solar_installers (city);")
+
+            cursor.execute("PRAGMA table_info(solar_installers);")
+            si_cols = {col["name"] for col in cursor.fetchall()}
+            if "business_category" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN business_category TEXT DEFAULT 'Installer';")
+            if "services_offered" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN services_offered TEXT;")
+            if "residential_service" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN residential_service BOOLEAN DEFAULT 1;")
+            if "commercial_service" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN commercial_service BOOLEAN DEFAULT 0;")
+            if "license_number" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN license_number TEXT;")
+            if "license_state" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN license_state TEXT;")
+            if "license_verification_status" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN license_verification_status TEXT DEFAULT 'UNVERIFIED';")
+            if "verification_source" not in si_cols:
+                cursor.execute("ALTER TABLE solar_installers ADD COLUMN verification_source TEXT DEFAULT 'places_discovered';")
+
             conn.commit()
 
         # Seed source registry table
@@ -399,6 +462,97 @@ class CrawlerStorage:
             cursor.execute("SELECT status, http_code FROM urls WHERE url_hash = ? LIMIT 1;", (url_hash,))
             row = cursor.fetchone()
             return (row["status"], row["http_code"]) if row else None
+
+    def get_url_record(self, url_hash: str) -> Optional[Dict[str, Any]]:
+        """Returns full URL record including scheduling metadata."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM urls WHERE url_hash = ? LIMIT 1;", (url_hash,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_eligible_urls(self, limit: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Retrieves URLs ready for processing:
+        1. Brand new PENDING URLs.
+        2. Previously crawled/failed/skipped URLs whose next_fetch_at has arrived.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT url, domain, depth, url_hash, status, etag, last_modified, page_type, priority, fetch_count
+                FROM urls
+                WHERE status = 'PENDING'
+                   OR (
+                       status IN ('CRAWLED', 'FAILED', 'SKIPPED')
+                       AND (next_fetch_at IS NULL OR next_fetch_at <= ?)
+                   )
+                ORDER BY priority DESC, depth ASC, created_at ASC
+                LIMIT ?;
+            """, (now_iso, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_url_fetch_result(
+        self,
+        url_hash: str,
+        status: str,
+        http_code: int,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+        content_hash: Optional[str] = None,
+        retry_after_seconds: Optional[int] = None,
+        revisit_interval_hours: Optional[float] = None
+    ):
+        """
+        Updates URL fetch status, HTTP code, caching headers, and schedules next_fetch_at.
+        Enforces revisit intervals (2-6h for categories, 12-24h for threads, retry-after for 429).
+        """
+        now = datetime.now(timezone.utc)
+        if retry_after_seconds is not None and retry_after_seconds > 0:
+            next_fetch = now + timedelta(seconds=retry_after_seconds)
+            interval_hrs = round(retry_after_seconds / 3600.0, 2)
+        elif revisit_interval_hours is not None and revisit_interval_hours > 0:
+            next_fetch = now + timedelta(hours=revisit_interval_hours)
+            interval_hrs = revisit_interval_hours
+        else:
+            # Default fallback interval: 6 hours
+            next_fetch = now + timedelta(hours=6.0)
+            interval_hrs = 6.0
+
+        now_iso = now.isoformat()
+        next_iso = next_fetch.isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE urls
+                SET status = ?,
+                    http_code = ?,
+                    crawled_at = ?,
+                    last_fetched_at = ?,
+                    next_fetch_at = ?,
+                    last_status_code = ?,
+                    fetch_count = COALESCE(fetch_count, 0) + 1,
+                    revisit_interval_hours = ?,
+                    etag = COALESCE(?, etag),
+                    last_modified = COALESCE(?, last_modified),
+                    content_hash = COALESCE(?, content_hash)
+                WHERE url_hash = ?;
+            """, (
+                status,
+                http_code,
+                now_iso,
+                now_iso,
+                next_iso,
+                http_code,
+                interval_hrs,
+                etag,
+                last_modified,
+                content_hash,
+                url_hash
+            ))
+            conn.commit()
 
     def get_pending_urls(self, limit: int = 1000) -> List[Tuple[str, str, int, str]]:
         """Returns list of (url, domain, depth, url_hash) for unfinished URLs."""
@@ -448,12 +602,16 @@ class CrawlerStorage:
             conn.commit()
 
     def reset_db(self):
-        """Clears all URLs, content hashes, and leads for a fresh crawl run."""
+        """Clears all URLs, content hashes, leads, and posts for a fresh crawl run."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM urls;")
             cursor.execute("DELETE FROM content_hashes;")
             cursor.execute("DELETE FROM solar_leads;")
+            cursor.execute("DELETE FROM discussion_posts;")
+            cursor.execute("DELETE FROM lead_evidence;")
+            cursor.execute("DELETE FROM intent_events;")
+            cursor.execute("DELETE FROM review_queue;")
             conn.commit()
 
     def get_database_stats(self) -> Dict[str, Any]:
@@ -465,11 +623,17 @@ class CrawlerStorage:
             content_hashes = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(*) FROM solar_leads;")
             leads_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM discussion_posts;")
+            posts_count = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(DISTINCT thread_url) FROM discussion_posts;")
+            threads_count = cursor.fetchone()[0]
             return {
                 "urls_by_status": url_counts,
                 "total_urls": sum(url_counts.values()),
                 "content_hashes": content_hashes,
-                "leads_count": leads_count
+                "leads_count": leads_count,
+                "posts_count": posts_count,
+                "threads_count": threads_count
             }
 
     # --- Content Deduplication Operations ---
@@ -480,10 +644,34 @@ class CrawlerStorage:
             cursor.execute("SELECT 1 FROM content_hashes WHERE content_hash = ? LIMIT 1;", (content_hash,))
             return cursor.fetchone() is not None
 
-    def check_near_duplicate_simhash(self, new_simhash: int, max_hamming_distance: int = 3) -> Optional[Tuple[str, int]]:
+    def get_exact_content_match(self, content_hash: str, exclude_url: Optional[str] = None) -> Optional[str]:
+        """Returns the URL of an existing document with the exact same content hash."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT url, simhash FROM content_hashes")
+            if exclude_url:
+                cursor.execute("SELECT url FROM content_hashes WHERE content_hash = ? AND url != ? LIMIT 1;", (content_hash, exclude_url))
+            else:
+                cursor.execute("SELECT url FROM content_hashes WHERE content_hash = ? LIMIT 1;", (content_hash,))
+            row = cursor.fetchone()
+            return row["url"] if row else None
+
+    def check_near_duplicate_simhash(
+        self,
+        new_simhash: int,
+        max_hamming_distance: int = 3,
+        exclude_url: Optional[str] = None
+    ) -> Optional[Tuple[str, int, str]]:
+        """
+        Scans existing SimHashes to detect near-duplicates.
+        Strictly excludes `exclude_url` so a URL can never match itself.
+        Returns: (matched_url, hamming_distance, matched_content_hash) or None.
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if exclude_url:
+                cursor.execute("SELECT url, simhash, content_hash FROM content_hashes WHERE url != ?;", (exclude_url,))
+            else:
+                cursor.execute("SELECT url, simhash, content_hash FROM content_hashes;")
             for row in cursor.fetchall():
                 simhash_str = row["simhash"]
                 try:
@@ -493,7 +681,7 @@ class CrawlerStorage:
                 xor_val = new_simhash ^ existing_simhash
                 distance = bin(xor_val).count("1")
                 if distance <= max_hamming_distance:
-                    return (row["url"], distance)
+                    return (row["url"], distance, row["content_hash"])
         return None
 
     def save_content_hash(self, content_hash: str, simhash: int, url: str, title: Optional[str] = None):
@@ -521,6 +709,63 @@ class CrawlerStorage:
             """, (content_hash, simhash_hex, url, title))
             conn.commit()
             return cursor.rowcount > 0
+
+    # --- Discussion Posts Operations (Per-Post Storage) ---
+
+    def save_discussion_post(self, post_data: Dict[str, Any]) -> bool:
+        """
+        Persists an individual forum or discussion post.
+        Returns True if new, False if already existed (avoids duplicate post saving).
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO discussion_posts (
+                    post_id, thread_url, source_name, thread_title, author_name,
+                    post_text, post_order, is_original_post, posted_at, reply_count,
+                    location_text, last_activity_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (
+                post_data.get("post_id"),
+                post_data.get("thread_url"),
+                post_data.get("source_name", "Unknown Source"),
+                post_data.get("thread_title"),
+                post_data.get("author_name", "Anonymous"),
+                post_data.get("post_text", ""),
+                post_data.get("post_order", 0),
+                1 if post_data.get("is_original_post", True) else 0,
+                post_data.get("posted_at"),
+                post_data.get("reply_count", 0),
+                post_data.get("location_text"),
+                post_data.get("last_activity_at")
+            ))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_discussion_posts(self, thread_url: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieves individual posts, optionally filtered by thread_url."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if thread_url:
+                cursor.execute("""
+                    SELECT * FROM discussion_posts 
+                    WHERE thread_url = ? 
+                    ORDER BY post_order ASC 
+                    LIMIT ?;
+                """, (thread_url, limit))
+            else:
+                cursor.execute("""
+                    SELECT * FROM discussion_posts 
+                    ORDER BY extracted_at DESC 
+                    LIMIT ?;
+                """, (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_post_count(self) -> int:
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM discussion_posts;")
+            return cursor.fetchone()[0]
 
     # --- Solar Leads Operations & JSON Export ---
 
@@ -684,7 +929,22 @@ class CrawlerStorage:
                     lead_id = row["id"] if row else 1
 
                 # Data Provenance: Persist structured evidence items into lead_evidence ledger
-                structured_evidence = lead_data.get("structured_evidence", [])
+                structured_evidence = list(lead_data.get("structured_evidence") or [])
+                if not structured_evidence and lead_data.get("evidence_snippets"):
+                    for snip in lead_data.get("evidence_snippets", []):
+                        clean_text = snip
+                        if ":" in snip:
+                            clean_text = snip.split(":", 1)[1].strip().strip('"')
+                        structured_evidence.append({
+                            "evidence_text": clean_text,
+                            "evidence_type": "PURCHASE_INTENT",
+                            "evidence_polarity": "POSITIVE",
+                            "published_at": lead_data.get("published_at"),
+                            "extraction_method": "RULE_REGEX_V2",
+                            "model_version": "2.0.0",
+                            "confidence": 0.9,
+                            "score_contribution": 1.0
+                        })
                 for ev in structured_evidence:
                     cursor.execute("""
                         INSERT INTO lead_evidence (
@@ -1085,8 +1345,10 @@ class CrawlerStorage:
                 INSERT INTO solar_installers (
                     place_id, company_name, formatted_address, city, state, zip_code,
                     phone_number, website_url, google_maps_url, rating, user_ratings_total,
-                    business_status, primary_type, metro_area, search_query
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    business_status, primary_type, metro_area, search_query,
+                    business_category, services_offered, residential_service, commercial_service,
+                    license_number, license_state, license_verification_status, verification_source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(place_id) DO UPDATE SET
                     company_name = excluded.company_name,
                     formatted_address = excluded.formatted_address,
@@ -1097,7 +1359,15 @@ class CrawlerStorage:
                     website_url = COALESCE(excluded.website_url, solar_installers.website_url),
                     google_maps_url = COALESCE(excluded.google_maps_url, solar_installers.google_maps_url),
                     rating = excluded.rating,
-                    user_ratings_total = excluded.user_ratings_total;
+                    user_ratings_total = excluded.user_ratings_total,
+                    business_category = COALESCE(excluded.business_category, solar_installers.business_category),
+                    services_offered = COALESCE(excluded.services_offered, solar_installers.services_offered),
+                    residential_service = COALESCE(excluded.residential_service, solar_installers.residential_service),
+                    commercial_service = COALESCE(excluded.commercial_service, solar_installers.commercial_service),
+                    license_number = COALESCE(excluded.license_number, solar_installers.license_number),
+                    license_state = COALESCE(excluded.license_state, solar_installers.license_state),
+                    license_verification_status = COALESCE(excluded.license_verification_status, solar_installers.license_verification_status),
+                    verification_source = COALESCE(excluded.verification_source, solar_installers.verification_source);
             """, (
                 installer_data.get("place_id"),
                 installer_data.get("company_name"),
@@ -1113,7 +1383,15 @@ class CrawlerStorage:
                 installer_data.get("business_status", "OPERATIONAL"),
                 installer_data.get("primary_type"),
                 installer_data.get("metro_area"),
-                installer_data.get("search_query")
+                installer_data.get("search_query"),
+                installer_data.get("business_category", "Installer"),
+                installer_data.get("services_offered"),
+                1 if installer_data.get("residential_service", True) else 0,
+                1 if installer_data.get("commercial_service", False) else 0,
+                installer_data.get("license_number"),
+                installer_data.get("license_state"),
+                installer_data.get("license_verification_status", "UNVERIFIED"),
+                installer_data.get("verification_source", "places_discovered")
             ))
             conn.commit()
             return cursor.rowcount > 0
@@ -1142,12 +1420,55 @@ class CrawlerStorage:
             with_phones = cursor.fetchone()[0]
             cursor.execute("SELECT COUNT(DISTINCT website_url) FROM solar_installers WHERE website_url IS NOT NULL AND website_url != '';")
             with_websites = cursor.fetchone()[0]
+            cursor.execute("SELECT business_category, COUNT(*) FROM solar_installers GROUP BY business_category;")
+            by_category = {row[0] or "Installer": row[1] for row in cursor.fetchall()}
             return {
                 "total_installers": total,
                 "by_state": by_state,
                 "with_phones": with_phones,
-                "with_websites": with_websites
+                "with_websites": with_websites,
+                "by_category": by_category
             }
+
+    def get_platform_metrics(self) -> Dict[str, Any]:
+        """
+        Returns strictly separated reporting metrics for:
+        1. Homeowner Leads (genuine consumer buying/upgrade/repair opportunities).
+        2. Discussion Forum Activity (extracted threads and individual posts).
+        3. Google Places Contractor Discovery (separate business registry).
+        """
+        lead_stats = self.get_quality_metrics()
+        installer_stats = self.get_installer_stats()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM discussion_posts;")
+            posts_total = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(DISTINCT thread_url) FROM discussion_posts;")
+            threads_total = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM solar_leads;")
+            leads_total = cursor.fetchone()[0]
+
+        return {
+            "homeowner_leads": {
+                "total_qualified_leads": leads_total,
+                "new_buyers": lead_stats.get("new_buyers_count", 0),
+                "existing_customer_upgrades": lead_stats.get("expansion_count", 0),
+                "service_repairs": lead_stats.get("repair_count", 0),
+                "by_category": lead_stats.get("by_category", {}),
+                "by_freshness": lead_stats.get("by_freshness", {})
+            },
+            "discussion_forum_extraction": {
+                "total_posts_extracted": posts_total,
+                "unique_threads_extracted": threads_total
+            },
+            "contractor_discovery_places": {
+                "places_discovered": installer_stats.get("total_installers", 0),
+                "with_phones": installer_stats.get("with_phones", 0),
+                "with_websites": installer_stats.get("with_websites", 0),
+                "by_business_category": installer_stats.get("by_category", {}),
+                "states_covered": len(installer_stats.get("by_state", {}))
+            }
+        }
 
     def export_installers_to_json(self) -> Optional[Path]:
         installers = self.get_solar_installers(limit=1000)

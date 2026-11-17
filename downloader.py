@@ -139,10 +139,16 @@ class HTMLDownloader:
                 return {"url": url, "status": 502, "html": None, "skipped": False, "transport": "DENO_GATEWAY"}
         return None
 
-    async def fetch(self, url: str) -> Optional[Dict[str, Any]]:
+    async def fetch(
+        self,
+        url: str,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
         Downloads a web page via the active transport (Deno Gateway or direct HTTPX),
-        or delegates to PRAW for Reddit URLs.
+        with conditional HTTP caching (ETag / Last-Modified), rate-limit handling,
+        and PRAW delegation for Reddit URLs.
         """
         domain = urlparse(url).netloc.lower()
 
@@ -206,20 +212,44 @@ class HTMLDownloader:
         start_time = time.perf_counter()
         logger.info(f"[Downloader: Direct HTTPX] Downloading: {url}")
 
+        req_headers = {}
+        if etag:
+            req_headers["If-None-Match"] = etag
+        if last_modified:
+            req_headers["If-Modified-Since"] = last_modified
+
         try:
-            response = await self.client.get(url)
+            response = await self.client.get(url, headers=req_headers if req_headers else None)
             elapsed_ms = (time.perf_counter() - start_time) * 1000
             status = response.status_code
             content_bytes = len(response.content)
             content_type = response.headers.get("Content-Type", "").lower()
+            resp_etag = response.headers.get("ETag")
+            resp_last_modified = response.headers.get("Last-Modified")
 
             logger.info(
                 f"[Downloader: Direct HTTPX] HTTP Status: {status} | URL: {response.url} | "
                 f"Size: {content_bytes:,} bytes | Time: {elapsed_ms:.0f}ms | Type: {content_type.split(';')[0]}"
             )
 
-            if "text/html" not in content_type and "application/xhtml" not in content_type:
-                logger.info(f"[Downloader Skipped] Non-HTML payload ({content_type}) for {url}")
+            # Handle HTTP 304 Not Modified
+            if status == 304:
+                logger.info(f"[Downloader: 304 Not Modified] Content unchanged for {url}")
+                return {
+                    "url": str(response.url),
+                    "status": 304,
+                    "html": None,
+                    "not_modified": True,
+                    "skipped": False,
+                    "etag": resp_etag or etag,
+                    "last_modified": resp_last_modified or last_modified,
+                    "transport": "DIRECT_HTTPX"
+                }
+
+            # Allow HTML, XHTML, and XML/RSS feeds
+            is_html_or_xml = any(t in content_type for t in ["text/html", "application/xhtml", "xml", "rss", "atom"])
+            if not is_html_or_xml:
+                logger.info(f"[Downloader Skipped] Non-HTML/XML payload ({content_type}) for {url}")
                 return {"url": str(response.url), "status": status, "html": None, "skipped": True, "transport": "DIRECT_HTTPX"}
 
             if status == 200:
@@ -228,15 +258,32 @@ class HTMLDownloader:
                     "status": status,
                     "html": response.text,
                     "skipped": False,
+                    "not_modified": False,
                     "is_reddit_praw": False,
+                    "etag": resp_etag,
+                    "last_modified": resp_last_modified,
                     "transport": "DIRECT_HTTPX"
                 }
             elif status == 403:
                 logger.warning(f"[Downloader Blocked] HTTP 403 Forbidden on {url} (Bot protection / access denied)")
                 return {"url": str(response.url), "status": status, "html": None, "skipped": False, "transport": "DIRECT_HTTPX"}
             elif status == 429:
-                logger.warning(f"[Downloader Rate-Limited] HTTP 429 Too Many Requests on {url}")
-                return {"url": str(response.url), "status": status, "html": None, "skipped": False, "transport": "DIRECT_HTTPX"}
+                retry_header = response.headers.get("Retry-After")
+                retry_seconds = 300  # Default 5-minute backoff
+                if retry_header:
+                    try:
+                        retry_seconds = int(retry_header)
+                    except ValueError:
+                        pass
+                logger.warning(f"[Downloader Rate-Limited] HTTP 429 on {url} (Retry-After: {retry_seconds}s)")
+                return {
+                    "url": str(response.url),
+                    "status": 429,
+                    "html": None,
+                    "skipped": False,
+                    "retry_after": retry_seconds,
+                    "transport": "DIRECT_HTTPX"
+                }
             else:
                 logger.warning(f"[Downloader Warning] HTTP {status} returned for {url}")
                 return {"url": str(response.url), "status": status, "html": None, "skipped": False, "transport": "DIRECT_HTTPX"}

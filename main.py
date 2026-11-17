@@ -188,23 +188,72 @@ class CrawlerCoordinator:
             url, domain, depth, url_hash = next_target
             self.storage.update_url_status(url_hash, "IN_PROGRESS")
 
+            # Retrieve cached ETag and Last-Modified headers for conditional GET
+            url_rec = self.storage.get_url_record(url_hash)
+            etag = url_rec.get("etag") if url_rec else None
+            last_modified = url_rec.get("last_modified") if url_rec else None
+            page_type = url_rec.get("page_type") if url_rec else "CATEGORY"
+            revisit_hrs = self.frontier.get_revisit_interval_hours(page_type)
+
             logger.info(f"[Downloader-{worker_id}] Processing target: {url} (Depth: {depth})")
-            result = await self.downloader.fetch(url)
+            result = await self.downloader.fetch(url, etag=etag, last_modified=last_modified)
 
             if not result or result.get("skipped"):
                 async with self._slot_lock:
                     self.claimed_slots -= 1
                 status_code = result.get("status") if result else 0
-                self.storage.update_url_status(url_hash, "SKIPPED", status_code)
+                self.storage.update_url_fetch_result(
+                    url_hash=url_hash,
+                    status="SKIPPED",
+                    http_code=status_code,
+                    revisit_interval_hours=2.0
+                )
                 logger.debug(f"[Downloader-{worker_id}] Skipped payload for {url} (HTTP {status_code})")
                 continue
 
             status_code = result.get("status", 0)
             html = result.get("html")
             is_praw = result.get("is_reddit_praw", False)
+            not_modified = result.get("not_modified", False)
+
+            if not_modified or status_code == 304:
+                # HTTP 304 Not Modified: Cache is fresh, schedule next refresh without re-parsing
+                async with self._slot_lock:
+                    self.claimed_slots -= 1
+                self.storage.update_url_fetch_result(
+                    url_hash=url_hash,
+                    status="CRAWLED",
+                    http_code=304,
+                    etag=result.get("etag") or etag,
+                    last_modified=result.get("last_modified") or last_modified,
+                    revisit_interval_hours=revisit_hrs
+                )
+                logger.info(f"[Downloader-{worker_id}] 304 Not Modified: {url} (Scheduled next refresh in {revisit_hrs}h)")
+                continue
+
+            if status_code == 429:
+                # HTTP 429 Rate Limited: Enforce Retry-After backoff
+                async with self._slot_lock:
+                    self.claimed_slots -= 1
+                retry_seconds = result.get("retry_after", 300)
+                self.storage.update_url_fetch_result(
+                    url_hash=url_hash,
+                    status="SKIPPED",
+                    http_code=429,
+                    retry_after_seconds=retry_seconds
+                )
+                logger.warning(f"[Downloader-{worker_id}] Rate-limited (429) on {url} (Backing off for {retry_seconds}s)")
+                continue
 
             if (status_code == 200 and html) or is_praw:
-                self.storage.update_url_status(url_hash, "CRAWLED", status_code)
+                self.storage.update_url_fetch_result(
+                    url_hash=url_hash,
+                    status="CRAWLED",
+                    http_code=status_code,
+                    etag=result.get("etag"),
+                    last_modified=result.get("last_modified"),
+                    revisit_interval_hours=revisit_hrs
+                )
                 self.crawled_count += 1
                 payload = result.get("reddit_posts") if is_praw else html
                 await self.raw_page_queue.put((result["url"], payload, depth, is_praw))
@@ -217,7 +266,12 @@ class CrawlerCoordinator:
             else:
                 async with self._slot_lock:
                     self.claimed_slots -= 1
-                self.storage.update_url_status(url_hash, "FAILED", status_code)
+                self.storage.update_url_fetch_result(
+                    url_hash=url_hash,
+                    status="FAILED",
+                    http_code=status_code,
+                    revisit_interval_hours=2.0
+                )
                 self.failed_count += 1
                 logger.warning(f"[Downloader-{worker_id}] FAILED -> {url} (HTTP {status_code})")
 
@@ -245,6 +299,12 @@ class CrawlerCoordinator:
                     parse_result = self.parser.parse_reddit_posts_list(url, payload)
                 else:
                     parse_result = self.parser.parse_page(url, payload, depth)
+
+                outbound_links = parse_result.get("outbound_links", [])
+                newly_enqueued = 0
+                for outbound_url in outbound_links:
+                    if await self.frontier.add_url(outbound_url, depth=depth + 1):
+                        newly_enqueued += 1
 
                 if parse_result.get("is_duplicate"):
                     self.duplicates_count += 1
@@ -278,12 +338,6 @@ class CrawlerCoordinator:
 
                     if parse_result.get("solar_lead"):
                         self.leads_discovered += 1
-
-                    outbound_links = parse_result.get("outbound_links", [])
-                    newly_enqueued = 0
-                    for outbound_url in outbound_links:
-                        if await self.frontier.add_url(outbound_url, depth=depth + 1):
-                            newly_enqueued += 1
 
                     logger.debug(
                         f"[Parser-{worker_id}] {url} -> "
@@ -611,28 +665,36 @@ def main():
         storage = CrawlerStorage()
         stats = storage.get_database_stats()
         quality_metrics = storage.get_quality_metrics()
-        print("\n--- Crawler Database Status ---")
-        print(f"Total URLs             : {stats['total_urls']}")
-        print(f"URLs by Status         : {stats['urls_by_status']}")
-        print(f"Unique Content Hashes  : {stats['content_hashes']}")
-        print(f"Total Qualified Leads  : {stats['leads_count']}")
-        print(f"By Classification      : {quality_metrics.get('by_classification', {})}")
-        print(f"By Buyer Stage         : {quality_metrics.get('by_stage', {})}")
-        print(f"By Category            : {quality_metrics.get('by_category', {})}")
-        print(f"By Freshness Tier      : {quality_metrics.get('by_freshness', {})}")
-        print(f"  New Buyers           : {quality_metrics.get('new_buyers_count', 0)}")
-        print(f"  Expansion Leads      : {quality_metrics.get('expansion_count', 0)}")
-        print(f"  Service / Repairs    : {quality_metrics.get('repair_count', 0)}")
+        platform_metrics = storage.get_platform_metrics()
 
-        inst_stats = storage.get_installer_stats()
-        if inst_stats.get("total_installers", 0) > 0:
-            print("--- Google Places Contractors ---")
-            print(f"Verified Solar Installers : {inst_stats['total_installers']}")
-            print(f"With Direct Phone Numbers : {inst_stats['with_phones']}")
-            print(f"With Official Websites    : {inst_stats['with_websites']}")
-            print(f"By State Breakdown        : {inst_stats['by_state']}")
+        print("\n" + "=" * 80)
+        print("          SOLAR LEAD INTELLIGENCE PLATFORM — SYSTEM STATUS")
+        print("=" * 80)
+        print("1. HOMEOWNER LEAD INTELLIGENCE (Consumer Buying & Service Opportunities):")
+        print(f"   Total Qualified Leads in DB : {platform_metrics['homeowner_leads']['total_qualified_leads']}")
+        print(f"   • New Buyers (Quote Seekers): {platform_metrics['homeowner_leads']['new_buyers']}")
+        print(f"   • Existing Customer Upgrades: {platform_metrics['homeowner_leads']['existing_customer_upgrades']}")
+        print(f"   • Service / Repair Inquiries: {platform_metrics['homeowner_leads']['service_repairs']}")
+        print(f"   • By Category               : {platform_metrics['homeowner_leads']['by_category']}")
+        print(f"   • By Freshness Tier         : {platform_metrics['homeowner_leads']['by_freshness']}")
 
-        print(f"Database File          : {storage.db_path}\n")
+        print("\n2. DISCUSSION FORUM EXTRACTION (Discussions & Granular Posts):")
+        print(f"   Total Posts Extracted       : {platform_metrics['discussion_forum_extraction']['total_posts_extracted']}")
+        print(f"   Unique Threads Extracted    : {platform_metrics['discussion_forum_extraction']['unique_threads_extracted']}")
+        print(f"   Total URLs Tracked          : {stats['total_urls']}")
+        print(f"   URLs by Fetch Status        : {stats['urls_by_status']}")
+        print(f"   Unique Content Hashes       : {stats['content_hashes']}")
+
+        inst = platform_metrics['contractor_discovery_places']
+        print("\n3. GOOGLE PLACES CONTRACTOR DIRECTORY (Separate Business Discovery Pipeline):")
+        print(f"   Total Businesses Discovered : {inst['places_discovered']}")
+        print(f"   • Direct Business Phones    : {inst['with_phones']}")
+        print(f"   • Official Company Websites : {inst['with_websites']}")
+        print(f"   • Business Categories       : {inst['by_business_category']}")
+        print(f"   • States Covered            : {inst['states_covered']}")
+
+        print(f"\nDatabase File: {storage.db_path}")
+        print("=" * 80 + "\n")
         return
 
     if args.places_only:

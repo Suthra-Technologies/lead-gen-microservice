@@ -112,6 +112,25 @@ class Deduplicator:
         """Counts differing bits between two SimHashes."""
         return bin(simhash1 ^ simhash2).count("1")
 
+    @staticmethod
+    def format_duplicate_diagnostic(
+        current_url: str,
+        matched_url: str,
+        current_len: int,
+        matched_len: int,
+        current_hash: str,
+        matched_hash: str,
+        simhash_distance: int,
+        reason: str
+    ) -> str:
+        """Formats structured diagnostic telemetry for rejected duplicate documents."""
+        return (
+            f"[Duplicate Diagnostic] Rejected: {current_url} | Matched: {matched_url} | "
+            f"Len(curr): {current_len} vs Len(prev): {matched_len} | "
+            f"Hash(curr): {current_hash[:12]}... vs Hash(prev): {matched_hash[:12]}... | "
+            f"SimHash Dist: {simhash_distance} | Reason: {reason}"
+        )
+
 
 class BloomFilter:
     """
