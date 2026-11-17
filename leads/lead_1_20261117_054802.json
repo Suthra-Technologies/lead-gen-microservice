@@ -1,0 +1,17 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/test_lifecycle_1",
+  "author": "SunSeeker",
+  "post_title": "Looking for residential installer in Tampa",
+  "intent_snippet": "Looking for solar quotes for single family roof",
+  "lead_score": 8.0,
+  "lead_category": "HOT_BUYER",
+  "lead_segment": "NEW_BUYER",
+  "classification_type": "RESIDENTIAL_NEW_BUYER",
+  "primary_classification": "RESIDENTIAL_NEW_BUYER",
+  "lead_freshness": "0-7 days",
+  "lead_status": "NEW",
+  "state": "FL",
+  "city": "Tampa"
+}

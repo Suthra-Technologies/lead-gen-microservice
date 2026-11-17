@@ -1,0 +1,28 @@
+{
+  "source_name": "Reddit r/Powerwall",
+  "source_url": "https://www.reddit.com/r/Powerwall/new.rss",
+  "post_url": "https://www.reddit.com/r/Powerwall/comments/1xv26ch/powerwall_3_stopped_exporting/",
+  "author": "imgoingsolar",
+  "post_title": "Powerwall 3 stopped exporting",
+  "intent_snippet": "Powerwall 3 stopped exporting I\u2019ve just noticed that my Powerwall 3 has stopped automatically exporting excess energy at the end of the day before cheap rate starts. Anyone else seeing this. I\u2019m uk based with IOG 6.6p cheap rate and Octopus Outgoing 12p rate. Looking back when stopped working I can see two changes, outside temperatures have dropped",
+  "lead_score": 4.0,
+  "lead_category": "WARM_BUYER",
+  "lead_segment": "SERVICE_CUSTOMER",
+  "classification_type": "RESIDENTIAL_REPAIR",
+  "lead_freshness": "0-7 days",
+  "published_at": "2026-11-13",
+  "latest_reply_at": null,
+  "property_type": null,
+  "country": "USA",
+  "state": null,
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": null,
+  "electricity_bill": null,
+  "buyer_stage": "SERVICE_REQUIRED",
+  "matched_keywords": [],
+  "evidence_snippets": [
+    "Homeowner seeking solar system diagnosis, inverter repair, or replacement (+4.0)"
+  ],
+  "crawled_at": "2026-11-16 10:49:21.304546+00:00"
+}

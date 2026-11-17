@@ -1,0 +1,32 @@
+{
+  "source_name": "Reddit r/solar",
+  "source_url": "https://www.reddit.com/r/solar/new.rss",
+  "post_url": "https://www.reddit.com/r/solar/comments/test1234/solar_quote_review/",
+  "author": "SunshineStateHomeowner",
+  "post_title": "Solar Quote Review: 8.5 kW system in Florida for $2.85/W",
+  "intent_snippet": "Solar Quote Review: 8.5 kW system in Florida for $2.85/W Looking for installer feedback. Got a quote for 8.5 kW system at $2.85 per watt with Enphase microinverters. Electric bill is $220/mo.",
+  "lead_score": 7.0,
+  "lead_category": "HOT_BUYER",
+  "lead_segment": "NEW_BUYER",
+  "classification_type": "RESIDENTIAL_QUOTE_SEEKER",
+  "lead_freshness": "0-7 days",
+  "published_at": "2026-11-16",
+  "latest_reply_at": null,
+  "property_type": null,
+  "country": "USA",
+  "state": "FL",
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": 8.5,
+  "electricity_bill": 220.0,
+  "buyer_stage": "COMPARING_QUOTES",
+  "matched_keywords": [
+    "Price signal ($2.85/W)",
+    "Electric bill stated ($220/mo)"
+  ],
+  "evidence_snippets": [
+    "Quote pricing evaluated: $2.85/watt (+4.0)",
+    "Pain point cited: $220/month electric bill (+3.0)"
+  ],
+  "crawled_at": "2026-11-16 10:50:25.636451+00:00"
+}

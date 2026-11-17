@@ -1,0 +1,31 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "www.solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/solar/how-much-do-solar-panels-cost/436721-a-few-questions-about-price-shopping",
+  "author": "wheaton4prez",
+  "post_title": "A Few Questions About Price Shopping... - \r\n\t\t\r\n\t\tSolar Panels - Solar Panels Forum",
+  "intent_snippet": "Hello. I'm not really trying to get bargain basement prices. I just want to make sure that I'm not getting gouged. Average/market price is ok with me. I'm in the North County San Diego area. According to this site, I should be able to get under $3/W But, I have two estimates and they are both right around $4/W. Is the above site wrong and $4/W is o",
+  "lead_score": 7.0,
+  "lead_category": "WARM_BUYER",
+  "classification_type": "RESIDENTIAL_QUOTE_SEEKER",
+  "lead_freshness": "Older than 90 days",
+  "published_at": "2022-12-07",
+  "latest_reply_at": "2022-12-14",
+  "property_type": null,
+  "country": "USA",
+  "state": null,
+  "city": null,
+  "zip_code": "92026",
+  "system_size_kw": 9.0,
+  "electricity_bill": null,
+  "buyer_stage": "COMPARING_QUOTES",
+  "matched_keywords": [
+    "high electric bill",
+    "Price signal ($3/W)"
+  ],
+  "evidence_snippets": [
+    "Intent (+3.0): \"FWIW, after having been involved in about 150+ installs in my HOA as the guy who reviews and recommends such installations to my HOA board since ~ 2006, I have yet to find any one of those folks - my neighbors - who cared about anything more than how\"",
+    "Quote pricing evaluated: $3/watt (+4.0)"
+  ],
+  "crawled_at": "2026-11-16 09:35:59.068891+00:00"
+}

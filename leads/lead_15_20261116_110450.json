@@ -1,0 +1,32 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "www.solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/solar/how-much-do-solar-panels-cost/346747-costco-sunrun-quote-19k-for-5-225kw-system-thoughts",
+  "author": "OCRibeye",
+  "post_title": "Costco/Sunrun Quote - $19K for 5.225kW system. Thoughts? - \r\n\t\t\r\n\t\tSolar Panels - Solar Panels Forum",
+  "intent_snippet": "Hi everyone, I am a new member on this forum. I live in Southern California (Orange County), and received the following quote from Costco/Sunrun to purchase a solar panel system: $19,000 (pre-incentives) 5.225 kW DC system Will produce 8,103 kWh of electricity in year 1, and will offset approximately 97-98% of our current electricity usage. It is e",
+  "lead_score": 7.5,
+  "lead_category": "WARM_BUYER",
+  "lead_segment": "NEW_BUYER",
+  "classification_type": "RESIDENTIAL_QUOTE_SEEKER",
+  "lead_freshness": "Older than 90 days",
+  "published_at": "2017-04-04",
+  "latest_reply_at": "2018-03-12",
+  "property_type": null,
+  "country": "USA",
+  "state": "CA",
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": 5.225,
+  "electricity_bill": null,
+  "buyer_stage": "COMPARING_QUOTES",
+  "matched_keywords": [
+    "going solar",
+    "Price signal ($3.00/W)"
+  ],
+  "evidence_snippets": [
+    "Intent (+3.5): \"That said, I took J.P.M.'s sage advice and replaced my 25 year old HVAC system before going solar.\"",
+    "Quote pricing evaluated: $3.00/watt (+4.0)"
+  ],
+  "crawled_at": "2026-11-16 11:04:50.276337+00:00"
+}

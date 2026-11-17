@@ -1,0 +1,30 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "www.solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/solar/how-much-do-solar-panels-cost/398231-i-m-back-where-is-roof-mount-pricing-nowadays-in-san-diego-area",
+  "author": "CharlieEscCA",
+  "post_title": "I'm back ... where is roof mount pricing nowadays in San Diego area - \r\n\t\t\r\n\t\tSolar Panels - Solar Panels Forum",
+  "intent_snippet": "New house construction is proceeding, estimated move-in in November. Had my previous company give me a proposal for new house and had some sticker shock. In 2017, I got an 8 KW DC ground mount installed for $2.83 per watt and now I'm getting quoted $3.65 per watt on SunPower panels w/SolarEdge 7600HD system sized at 6.21 KW. Yes, I know SunPower is",
+  "lead_score": 4.0,
+  "lead_category": "WARM_BUYER",
+  "lead_segment": "NEW_BUYER",
+  "classification_type": "RESIDENTIAL_QUOTE_SEEKER",
+  "lead_freshness": "Older than 90 days",
+  "published_at": "2019-05-30",
+  "latest_reply_at": "2019-06-04",
+  "property_type": "Single Family Residential",
+  "country": "USA",
+  "state": null,
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": 8.0,
+  "electricity_bill": null,
+  "buyer_stage": "COMPARING_QUOTES",
+  "matched_keywords": [
+    "Price signal ($2.83/W)"
+  ],
+  "evidence_snippets": [
+    "Quote pricing evaluated: $2.83/watt (+4.0)"
+  ],
+  "crawled_at": "2026-11-16 11:04:58.459352+00:00"
+}

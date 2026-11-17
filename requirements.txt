@@ -1,0 +1,21 @@
+# HTTP & Asynchronous Crawling
+httpx>=0.28.0
+aiohttp>=3.11.0
+
+# HTML Parsing & Clean Text Extraction
+beautifulsoup4>=4.13.0
+lxml>=5.3.0
+trafilatura>=2.3.0
+
+# Data Validation & Schema Modeling
+pydantic>=2.10.0
+
+# Reliability, Environment & Configuration
+python-dotenv>=1.0.0
+
+# Optional Advanced Modules (Enable as needed)
+# praw>=7.8.0          # For official Reddit API access
+# playwright>=1.50.0   # For headless browser JS rendering
+# sqlalchemy>=2.0.0    # For advanced relational ORM
+# aiosqlite>=0.21.0    # For fully async SQLite
+

@@ -1,0 +1,27 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "www.solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/solar-panels-for-home/solar-panel-installation/442011-upgrade-existing-solar-panels",
+  "author": "RoyGBiv",
+  "post_title": "Upgrade Existing Solar Panels - \r\n\t\t\r\n\t\tSolar Panels - Solar Panels Forum",
+  "intent_snippet": "I have an existing 12 year old solar install on my garage using 8 x Enphase Microinverters and Kyocera 240w panels (14% efficient). Its a 1920W system. I suspect a few of the Enphase inverters and or panels have gone south on me as the system output is not as good as it used to be in direct sunlight (no shading) but I do not have per module monitor",
+  "lead_score": 2.0,
+  "lead_category": "Researching",
+  "classification_type": "RESIDENTIAL_TURNKEY",
+  "lead_freshness": "Older than 90 days",
+  "published_at": "2024-03-01",
+  "country": "USA",
+  "state": "CA",
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": 2.0,
+  "electricity_bill": null,
+  "buyer_stage": "Planning",
+  "matched_keywords": [
+    "enphase"
+  ],
+  "evidence_snippets": [
+    "Found phrase: 'enphase' (+2.0)"
+  ],
+  "crawled_at": "2026-11-16 09:18:28.106348+00:00"
+}

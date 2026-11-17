@@ -1,0 +1,32 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "www.solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/solar/how-much-do-solar-panels-cost/437319-looking-for-advice-is-this-a-fair-price",
+  "author": "we0dx",
+  "post_title": "Looking for advice: is this a fair price? - \r\n\t\t\r\n\t\tSolar Panels - Solar Panels Forum",
+  "intent_snippet": "Hello,  New to the forum and I'm looking advice for a new system. I'm considering going solar, and I got a quote for a 6kW DC solar system (with no battery backup) for $47k. That's before the tax credit and the goodies that they put on the paper to sweet the eye. I live in Kansas City, MO, and I know there are a lot of details to look for, but wond",
+  "lead_score": 7.5,
+  "lead_category": "WARM_BUYER",
+  "lead_segment": "NEW_BUYER",
+  "classification_type": "RESIDENTIAL_QUOTE_SEEKER",
+  "lead_freshness": "Older than 90 days",
+  "published_at": "2023-01-16",
+  "latest_reply_at": "2023-01-30",
+  "property_type": null,
+  "country": "USA",
+  "state": "FL",
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": 6.0,
+  "electricity_bill": null,
+  "buyer_stage": "COMPARING_QUOTES",
+  "matched_keywords": [
+    "going solar",
+    "Price signal ($3/W)"
+  ],
+  "evidence_snippets": [
+    "Intent (+3.5): \"I'm considering going solar, and I got a quote for a 6kW DC solar system (with no battery backup) for $47k.\"",
+    "Quote pricing evaluated: $3/watt (+4.0)"
+  ],
+  "crawled_at": "2026-11-16 10:49:36.634065+00:00"
+}

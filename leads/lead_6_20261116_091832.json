@@ -1,0 +1,29 @@
+{
+  "source_name": "SolarPanelTalk",
+  "source_url": "www.solarpaneltalk.com",
+  "post_url": "https://www.solarpaneltalk.com/forum/solar-panels-for-home/solar-panel-installation/442494-myenergy-additional-panels-to-existing-set-up-with-iq7a-inverters",
+  "author": "Glassdome",
+  "post_title": "myEnergy additional panels to existing set up with IQ7A inverters - \r\n\t\t\r\n\t\tSolar Panels - Solar Panels Forum",
+  "intent_snippet": "Hi, we have an existing set up professionally installed by a MSC registered agent. Currently we have 4 panels on one outbuiding (a garage) with an enphase envoy (connected to the telsa hub and internet) and each panel has its own IQ7A micro inverter. The garage is around 50 ft from the main house where we have a Tesla gateway and the 4 panels link ",
+  "lead_score": 4.5,
+  "lead_category": "Warm Lead",
+  "classification_type": "RESIDENTIAL_TURNKEY",
+  "lead_freshness": "Older than 90 days",
+  "published_at": "2024-04-27",
+  "country": "USA",
+  "state": null,
+  "city": null,
+  "zip_code": null,
+  "system_size_kw": 9.0,
+  "electricity_bill": null,
+  "buyer_stage": "Planning",
+  "matched_keywords": [
+    "tesla powerwall",
+    "enphase"
+  ],
+  "evidence_snippets": [
+    "Found phrase: 'tesla powerwall' (+2.5)",
+    "Found phrase: 'enphase' (+2.0)"
+  ],
+  "crawled_at": "2026-11-16 09:18:32.327924+00:00"
+}

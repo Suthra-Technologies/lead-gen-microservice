@@ -1,0 +1,54 @@
+[
+  {
+    "id": 6,
+    "source_name": "SIREN Solar Q&A",
+    "source_url": "https://www.sirensolar.org/contact-siren/",
+    "company_name": "SIREN Solar Q&A",
+    "contact_type": "CONTACT_FORM",
+    "contact_value": "https://www.sirensolar.org/contact-siren/#wpcf7-f1312-p1441-o1",
+    "evidence_snippet": "Official public contact inquiry form on https://www.sirensolar.org/contact-siren/",
+    "verification_status": "VERIFIED_PUBLIC_BUSINESS",
+    "discovered_at": "2026-11-16 10:49:52",
+    "author_username": null,
+    "source_permalink": "https://www.sirensolar.org/contact-siren/"
+  },
+  {
+    "id": 3,
+    "source_name": "SIREN Solar Q&A",
+    "source_url": "https://www.sirensolar.org/contractors/",
+    "company_name": "SIREN Solar Q&A",
+    "contact_type": "CONTACT_FORM",
+    "contact_value": "https://www.sirensolar.org/",
+    "evidence_snippet": "Official public contact inquiry form on https://www.sirensolar.org/contractors/",
+    "verification_status": "VERIFIED_PUBLIC_BUSINESS",
+    "discovered_at": "2026-11-16 09:51:13",
+    "author_username": null,
+    "source_permalink": null
+  },
+  {
+    "id": 2,
+    "source_name": "Solar United Neighbors",
+    "source_url": "https://solarunitedneighbors.org/about-us/partner-with-us/national-solar-activist-network/",
+    "company_name": "Solar United Neighbors",
+    "contact_type": "CONTACT_FORM",
+    "contact_value": "https://solarunitedneighbors.org/",
+    "evidence_snippet": "Official public contact inquiry form on https://solarunitedneighbors.org/about-us/partner-with-us/national-solar-activist-network/",
+    "verification_status": "VERIFIED_PUBLIC_BUSINESS",
+    "discovered_at": "2026-11-16 09:50:51",
+    "author_username": null,
+    "source_permalink": null
+  },
+  {
+    "id": 1,
+    "source_name": "Solar United Neighbors",
+    "source_url": "https://solarunitedneighbors.org/about-us/partner-with-us/national-solar-activist-network/",
+    "company_name": "Solar United Neighbors",
+    "contact_type": "BUSINESS_EMAIL",
+    "contact_value": "ehellkamp@solarunitedneighbors.org",
+    "evidence_snippet": "Official published business contact: Email us",
+    "verification_status": "VERIFIED_PUBLIC_BUSINESS",
+    "discovered_at": "2026-11-16 09:50:51",
+    "author_username": null,
+    "source_permalink": null
+  }
+]
