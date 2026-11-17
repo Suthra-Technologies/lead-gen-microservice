@@ -112,6 +112,11 @@ class SolarLead(BaseModel):
     location_confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Confidence of extracted location")
     freshness_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Normalized freshness factor")
     evidence_confidence: float = Field(default=0.0, ge=0.0, le=1.0, description="Confidence of extracted intent evidence")
+    composite_qualification_score: float = Field(default=0.0, ge=0.0, le=100.0, description="Standardized 100-pt qualification formula Q")
+    hard_disqualified: bool = Field(default=False)
+    disqualification_reason: Optional[str] = Field(default=None)
+    needs_human_review: bool = Field(default=False)
+    review_reason: Optional[str] = Field(default=None)
     
     # Lead Lifecycle & CRM Integration
     lead_status: str = Field(default=LeadLifecycleStatus.NEW.value, description="CRM Lifecycle state")
@@ -170,6 +175,56 @@ class LeadValidationResult(BaseModel):
     is_valid: bool
     status: str = "PASSED"
     flags: List[str] = Field(default_factory=list)
+
+
+class LeadEvidence(BaseModel):
+    evidence_id: Optional[int] = None
+    lead_id: Optional[int] = None
+    source_url: str
+    source_author: Optional[str] = "Anonymous"
+    evidence_text: str
+    evidence_type: str = "PURCHASE_INTENT"
+    evidence_polarity: str = "POSITIVE"
+    published_at: Optional[str] = None
+    extracted_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+    extraction_method: str = "RULE_REGEX_V1"
+    model_version: str = "2.0.0"
+    confidence: float = 1.0
+    score_contribution: float = 0.0
+
+
+class IntentEvent(BaseModel):
+    intent_event_id: Optional[int] = None
+    lead_id: Optional[int] = None
+    evidence_id: Optional[int] = None
+    intent_type: str = "PURCHASE_INTENT"
+    intent_polarity: str = "POSITIVE"
+    intent_published_at: Optional[str] = None
+    intent_confidence: float = 1.0
+    recorded_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class LeadReviewRecord(BaseModel):
+    review_id: Optional[int] = None
+    lead_id: int
+    review_reason: str
+    review_priority: str = "NORMAL"
+    review_status: str = "PENDING"
+    assigned_reviewer: Optional[str] = None
+    created_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+    reviewed_at: Optional[datetime] = None
+    reviewer_notes: Optional[str] = None
+
+
+class SourceCompliance(BaseModel):
+    source_id: str
+    terms_url: Optional[str] = None
+    robots_policy_status: str = "PERMITTED"
+    api_policy_status: str = "COMPLIANT"
+    permitted_collection_method: str = "PUBLIC_HTML"
+    commercial_use_status: str = "RESTRICTED_REVIEW"
+    reviewed_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))
+    reviewed_by: str = "SYSTEM_AUDITOR"
 
 
 class BusinessContactType(str, Enum):

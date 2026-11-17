@@ -165,12 +165,113 @@ class CrawlerStorage:
                 cursor.execute("ALTER TABLE solar_leads ADD COLUMN estimated_solar_offset_percent REAL;")
             if "assigned_contractor_id" not in existing_cols:
                 cursor.execute("ALTER TABLE solar_leads ADD COLUMN assigned_contractor_id TEXT;")
+            if "composite_qualification_score" not in existing_cols:
+                cursor.execute("ALTER TABLE solar_leads ADD COLUMN composite_qualification_score REAL DEFAULT 0.0;")
+            if "hard_disqualified" not in existing_cols:
+                cursor.execute("ALTER TABLE solar_leads ADD COLUMN hard_disqualified INTEGER DEFAULT 0;")
+            if "disqualification_reason" not in existing_cols:
+                cursor.execute("ALTER TABLE solar_leads ADD COLUMN disqualification_reason TEXT;")
+            if "needs_human_review" not in existing_cols:
+                cursor.execute("ALTER TABLE solar_leads ADD COLUMN needs_human_review INTEGER DEFAULT 0;")
+            if "review_reason" not in existing_cols:
+                cursor.execute("ALTER TABLE solar_leads ADD COLUMN review_reason TEXT;")
 
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_score ON solar_leads (lead_score);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_category ON solar_leads (lead_category);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_class ON solar_leads (classification_type);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_segment ON solar_leads (lead_segment);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_status ON solar_leads (lead_status);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_leads_qual_score ON solar_leads (composite_qualification_score);")
+
+            # 1. Lead Evidence Ledger Table (Provenance & Auditability)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS lead_evidence (
+                    evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lead_id INTEGER NOT NULL,
+                    source_url TEXT NOT NULL,
+                    source_author TEXT,
+                    evidence_text TEXT NOT NULL,
+                    evidence_type TEXT,
+                    evidence_polarity TEXT DEFAULT 'POSITIVE',
+                    published_at TEXT,
+                    extracted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    extraction_method TEXT DEFAULT 'RULE_REGEX_V1',
+                    model_version TEXT DEFAULT '2.0.0',
+                    confidence REAL DEFAULT 1.0,
+                    score_contribution REAL DEFAULT 0.0,
+                    FOREIGN KEY (lead_id) REFERENCES solar_leads(id)
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_evidence_lead ON lead_evidence (lead_id);")
+
+            # 2. Intent Events Table (3-Timestamp Evidence Level)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS intent_events (
+                    intent_event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lead_id INTEGER NOT NULL,
+                    evidence_id INTEGER,
+                    intent_type TEXT NOT NULL,
+                    intent_polarity TEXT DEFAULT 'POSITIVE',
+                    intent_published_at TEXT,
+                    intent_confidence REAL DEFAULT 1.0,
+                    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (lead_id) REFERENCES solar_leads(id),
+                    FOREIGN KEY (evidence_id) REFERENCES lead_evidence(evidence_id)
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_lead ON intent_events (lead_id);")
+
+            # 3. Human Review Queue Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS review_queue (
+                    review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    lead_id INTEGER NOT NULL,
+                    review_reason TEXT NOT NULL,
+                    review_priority TEXT DEFAULT 'NORMAL',
+                    review_status TEXT DEFAULT 'PENDING',
+                    assigned_reviewer TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reviewed_at TIMESTAMP,
+                    reviewer_notes TEXT,
+                    FOREIGN KEY (lead_id) REFERENCES solar_leads(id)
+                );
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_review_status ON review_queue (review_status);")
+
+            # 4. Source Compliance & Privacy Policy Table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS source_compliance (
+                    source_id TEXT PRIMARY KEY,
+                    terms_url TEXT,
+                    robots_policy_status TEXT DEFAULT 'PERMITTED',
+                    api_policy_status TEXT DEFAULT 'COMPLIANT',
+                    permitted_collection_method TEXT DEFAULT 'PUBLIC_HTML',
+                    commercial_use_status TEXT DEFAULT 'RESTRICTED_REVIEW',
+                    reviewed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reviewed_by TEXT DEFAULT 'SYSTEM_AUDITOR'
+                );
+            """)
+
+            # 5. Privacy Suppression Records & Deletion Requests
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS suppression_records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_value TEXT NOT NULL UNIQUE,
+                    entity_type TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS deletion_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    request_id TEXT NOT NULL UNIQUE,
+                    entity_value TEXT NOT NULL,
+                    requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TIMESTAMP,
+                    status TEXT DEFAULT 'PROCESSED'
+                );
+            """)
 
             # Lead Lifecycle History Table
             cursor.execute("""
@@ -405,6 +506,22 @@ class CrawlerStorage:
             """, (content_hash, simhash_hex, url, title))
             conn.commit()
 
+    def save_content_hash_atomic(self, content_hash: str, simhash: int, url: str, title: Optional[str] = None) -> bool:
+        """
+        Atomically attempts to store content hash.
+        Returns True if newly inserted, False if it was already stored (exact duplicate).
+        Prevents concurrency race conditions between parser workers.
+        """
+        simhash_hex = f"{simhash:016x}"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO content_hashes (content_hash, simhash, url, title)
+                VALUES (?, ?, ?, ?);
+            """, (content_hash, simhash_hex, url, title))
+            conn.commit()
+            return cursor.rowcount > 0
+
     # --- Solar Leads Operations & JSON Export ---
 
     def save_solar_lead(self, lead_data: Dict[str, Any]) -> bool:
@@ -447,6 +564,8 @@ class CrawlerStorage:
                         estimated_monthly_usage_kwh, estimated_annual_usage_kwh,
                         estimated_system_size_kw, estimated_solar_offset_percent,
                         assigned_contractor_id,
+                        composite_qualification_score, hard_disqualified, disqualification_reason,
+                        needs_human_review, review_reason,
                         buyer_stage, matched_keywords, evidence_snippets
                     ) VALUES (
                         ?, ?, ?, ?, ?,
@@ -463,6 +582,8 @@ class CrawlerStorage:
                         ?, ?,
                         ?, ?,
                         ?,
+                        ?, ?, ?,
+                        ?, ?,
                         ?, ?, ?
                     )
                     ON CONFLICT(post_url) DO UPDATE SET
@@ -485,6 +606,11 @@ class CrawlerStorage:
                         location_confidence = excluded.location_confidence,
                         freshness_score = excluded.freshness_score,
                         evidence_confidence = excluded.evidence_confidence,
+                        composite_qualification_score = excluded.composite_qualification_score,
+                        hard_disqualified = excluded.hard_disqualified,
+                        disqualification_reason = excluded.disqualification_reason,
+                        needs_human_review = excluded.needs_human_review,
+                        review_reason = excluded.review_reason,
                         lead_status = excluded.lead_status,
                         qualification_status = excluded.qualification_status,
                         validation_status = excluded.validation_status,
@@ -542,11 +668,70 @@ class CrawlerStorage:
                     lead_data.get("estimated_system_size_kw"),
                     lead_data.get("estimated_solar_offset_percent"),
                     lead_data.get("assigned_contractor_id"),
+                    lead_data.get("composite_qualification_score", 0.0),
+                    1 if lead_data.get("hard_disqualified") else 0,
+                    lead_data.get("disqualification_reason"),
+                    1 if lead_data.get("needs_human_review") else 0,
+                    lead_data.get("review_reason"),
                     lead_data.get("buyer_stage", "UNKNOWN"),
                     json.dumps(lead_data.get("matched_keywords", [])),
                     json.dumps(lead_data.get("evidence_snippets", []))
                 ))
                 lead_id = cursor.lastrowid
+                if not lead_id or lead_id == 0:
+                    cursor.execute("SELECT id FROM solar_leads WHERE post_url = ?;", (lead_data["post_url"],))
+                    row = cursor.fetchone()
+                    lead_id = row["id"] if row else 1
+
+                # Data Provenance: Persist structured evidence items into lead_evidence ledger
+                structured_evidence = lead_data.get("structured_evidence", [])
+                for ev in structured_evidence:
+                    cursor.execute("""
+                        INSERT INTO lead_evidence (
+                            lead_id, source_url, source_author, evidence_text,
+                            evidence_type, evidence_polarity, published_at,
+                            extraction_method, model_version, confidence, score_contribution
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    """, (
+                        lead_id,
+                        lead_data.get("post_url", ""),
+                        lead_data.get("author", "Anonymous"),
+                        ev.get("evidence_text", ""),
+                        ev.get("evidence_type", "PURCHASE_INTENT"),
+                        ev.get("evidence_polarity", "POSITIVE"),
+                        ev.get("published_at") or lead_data.get("published_at"),
+                        ev.get("extraction_method", "RULE_REGEX_V1"),
+                        ev.get("model_version", "2.0.0"),
+                        ev.get("confidence", 1.0),
+                        ev.get("score_contribution", 0.0)
+                    ))
+                    ev_id = cursor.lastrowid
+                    # Record granular intent event
+                    cursor.execute("""
+                        INSERT INTO intent_events (
+                            lead_id, evidence_id, intent_type, intent_polarity,
+                            intent_published_at, intent_confidence
+                        ) VALUES (?, ?, ?, ?, ?, ?);
+                    """, (
+                        lead_id,
+                        ev_id,
+                        ev.get("evidence_type", "PURCHASE_INTENT"),
+                        ev.get("evidence_polarity", "POSITIVE"),
+                        ev.get("published_at") or lead_data.get("published_at"),
+                        ev.get("confidence", 1.0)
+                    ))
+
+                # Human-In-The-Loop: Route to review_queue if flagged
+                if lead_data.get("needs_human_review"):
+                    cursor.execute("""
+                        INSERT INTO review_queue (lead_id, review_reason, review_priority)
+                        VALUES (?, ?, ?);
+                    """, (
+                        lead_id,
+                        lead_data.get("review_reason", "Low confidence or ambiguous intent"),
+                        "HIGH" if lead_data.get("composite_qualification_score", 0) > 70 else "NORMAL"
+                    ))
+
                 conn.commit()
 
                 # Export single JSON file to leads/ folder
@@ -676,6 +861,105 @@ class CrawlerStorage:
                 SELECT * FROM lead_history WHERE lead_id = ? ORDER BY changed_at ASC;
             """, (lead_id,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_lead_evidence(self, lead_id: int) -> List[Dict[str, Any]]:
+        """Returns all granular evidence ledger records for a lead."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM lead_evidence WHERE lead_id = ? ORDER BY evidence_id ASC;
+            """, (lead_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_intent_events(self, lead_id: int) -> List[Dict[str, Any]]:
+        """Returns time-series intent events for a lead."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM intent_events WHERE lead_id = ? ORDER BY intent_event_id ASC;
+            """, (lead_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_review_queue(self, status: str = "PENDING", limit: int = 50) -> List[Dict[str, Any]]:
+        """Returns leads awaiting human review."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT r.*, l.post_title, l.post_url, l.lead_score, l.composite_qualification_score, l.state
+                FROM review_queue r
+                JOIN solar_leads l ON r.lead_id = l.id
+                WHERE r.review_status = ?
+                ORDER BY r.created_at ASC LIMIT ?;
+            """, (status, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def process_review_decision(self, review_id: int, decision: str, notes: str = "", reviewer: str = "HUMAN_OPERATOR") -> bool:
+        """Processes a reviewer's decision (APPROVED, REJECTED, MODIFIED)."""
+        now = datetime.now(timezone.utc)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT lead_id FROM review_queue WHERE review_id = ?;", (review_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            lead_id = row["lead_id"]
+
+            cursor.execute("""
+                UPDATE review_queue 
+                SET review_status = ?, reviewed_at = ?, assigned_reviewer = ?, reviewer_notes = ?
+                WHERE review_id = ?;
+            """, (decision, now, reviewer, notes, review_id))
+
+            new_status = "QUALIFIED" if decision == "APPROVED" else "DISQUALIFIED"
+            cursor.execute("""
+                UPDATE solar_leads 
+                SET qualification_status = ?, needs_human_review = 0, lead_status = ?
+                WHERE id = ?;
+            """, (new_status, new_status, lead_id))
+
+            cursor.execute("""
+                INSERT INTO lead_history (lead_id, old_status, new_status, changed_by, reason)
+                VALUES (?, 'PENDING_REVIEW', ?, ?, ?);
+            """, (lead_id, new_status, reviewer, f"Human review decision: {decision}. Notes: {notes}"))
+
+            conn.commit()
+            return True
+
+    def is_suppressed(self, entity_value: str) -> bool:
+        """Checks if a user, URL, or domain is in privacy suppression registry."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM suppression_records WHERE entity_value = ? LIMIT 1;", (entity_value,))
+            return cursor.fetchone() is not None
+
+    def add_suppression(self, entity_value: str, entity_type: str, reason: str) -> bool:
+        """Adds an entity to the suppression registry (TCPA/CAN-SPAM/opt-out compliance)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR IGNORE INTO suppression_records (entity_value, entity_type, reason)
+                VALUES (?, ?, ?);
+            """, (entity_value, entity_type, reason))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def process_deletion_request(self, entity_value: str) -> int:
+        """Purges an entity's records in compliance with data privacy regulations (CCPA/CPRA)."""
+        deleted_count = 0
+        now = datetime.now(timezone.utc)
+        req_id = f"DEL_{now.strftime('%Y%m%d%H%M%S')}_{abs(hash(entity_value)) % 10000}"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM solar_leads WHERE author = ? OR post_url = ?;", (entity_value, entity_value))
+            deleted_count += cursor.rowcount
+            cursor.execute("DELETE FROM business_contacts WHERE author_username = ? OR contact_value = ?;", (entity_value, entity_value))
+            deleted_count += cursor.rowcount
+            cursor.execute("""
+                INSERT INTO deletion_requests (request_id, entity_value, processed_at, status)
+                VALUES (?, ?, ?, 'COMPLETED');
+            """, (req_id, entity_value, now))
+            conn.commit()
+        return deleted_count
 
     # --- Source Registry & Business Contact Operations ---
 

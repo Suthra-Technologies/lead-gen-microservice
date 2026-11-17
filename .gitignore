@@ -36,6 +36,8 @@ data/*.db-journal
 data/*.log
 data/test_*.db
 logs/
+leads/*.json
+raw_html/
 
 # IDE and Editor files
 .vscode/

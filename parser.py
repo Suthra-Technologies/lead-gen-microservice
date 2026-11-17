@@ -83,14 +83,15 @@ class ContentParser:
         "quote comparison", "comparing quotes", "comparing solar quotes",
         "review my quote", "is this quote reasonable", "is this quote fair",
         "received a quote", "got a quote", "got quoted", "quote for",
-        "two quotes", "three quotes", "competing quotes", "solar proposal"
+        "two quotes", "three quotes", "competing quotes", "solar proposal", "solar proposals"
     ]
 
     INSTALLER_SEARCH_PHRASES = [
         "looking for a solar installer", "looking for solar installer",
-        "need a solar installation quote", "installer recommendation",
-        "installer recommendations", "can anyone recommend a solar installer",
-        "recommend an installer", "recommend a solar installer",
+        "looking for solar installers", "looking for recommended solar installers",
+        "need a solar installation quote", "need solar proposals", "need to go solar",
+        "installer recommendation", "installer recommendations", "recommended installers", "recommended solar installers",
+        "can anyone recommend a solar installer", "recommend an installer", "recommend a solar installer",
         "want to install solar on my house", "want to install solar",
         "planning to install solar", "planning a new installation",
         "how much would a solar installation cost", "thinking about getting solar"
@@ -375,15 +376,15 @@ class ContentParser:
         evidence_snippets: List[str],
         state: Optional[str] = None,
         zip_code: Optional[str] = None,
-        intent_age_days: Optional[int] = None
-    ) -> Dict[str, float]:
+        intent_age_days: Optional[int] = None,
+        buyer_stage: str = "UNKNOWN",
+        is_hypothetical: bool = False
+    ) -> Dict[str, Any]:
         """
-        Calculates 6-dimensional qualification confidence:
-        - purchase_intent_score (normalized 0.0 to 10.0)
-        - residential_confidence (0.0 to 1.0)
-        - location_confidence (0.0 to 1.0)
-        - freshness_score (0.0 to 1.0)
-        - evidence_confidence (0.0 to 1.0)
+        Calculates 6-dimensional qualification confidence and standardized composite score Q:
+        Q = 0.30*I + 0.20*R + 0.15*L + 0.15*F + 0.15*E + 0.05*B
+        Enforces hard disqualification gates (commercial, spam, negative intent, purely hypothetical).
+        Routes ambiguous or low-evidence opportunities to the human review queue.
         """
         lower = f"{title}\n{text}".lower()
 
@@ -430,12 +431,68 @@ class ContentParser:
         else:
             ev_conf = min(1.0, round(len(evidence_snippets) * 0.35, 2))
 
+        # 6. Standardized 100-pt Composite Qualification Score Q (Gap Analysis V2)
+        I_scaled = p_intent * 10.0     # 0 to 100
+        R_scaled = res_conf * 100.0    # 0 to 100
+        L_scaled = loc_conf * 100.0    # 0 to 100
+        F_scaled = fresh_score * 100.0 # 0 to 100
+        E_scaled = ev_conf * 100.0     # 0 to 100
+
+        stage_weights = {
+            "SEEKING_QUOTES": 100.0,
+            "COMPARING_QUOTES": 95.0,
+            "READY_TO_PURCHASE": 90.0,
+            "PLANNING": 75.0,
+            "EXPLORING": 50.0,
+            "EXISTING_CUSTOMER": 40.0,
+            "SERVICE_REQUIRED": 40.0,
+            "UNKNOWN": 20.0
+        }
+        B_scaled = stage_weights.get(buyer_stage, 20.0)
+
+        Q = round(0.30 * I_scaled + 0.20 * R_scaled + 0.15 * L_scaled + 0.15 * F_scaled + 0.15 * E_scaled + 0.05 * B_scaled, 1)
+
+        # Hard Disqualification Gates
+        hard_disqualified = False
+        disqualification_reason = None
+        needs_review = False
+        review_reason = None
+
+        if classification in (CLASSIFICATION_COMMERCIAL, CLASSIFICATION_SPAM_VENDOR, CLASSIFICATION_DIY_OFFGRID, CLASSIFICATION_GENERAL_INFO, CLASSIFICATION_TECHNICAL):
+            hard_disqualified = True
+            disqualification_reason = f"Excluded non-buyer category: {classification}"
+            Q = 0.0
+        elif p_intent <= 0.0:
+            hard_disqualified = True
+            disqualification_reason = "No positive buyer intent or net negative intent"
+            Q = 0.0
+        elif is_hypothetical and p_intent < 5.0:
+            hard_disqualified = True
+            disqualification_reason = "Purely hypothetical inquiry without buying intent"
+            Q = 0.0
+
+        if not hard_disqualified:
+            if ev_conf == 0.0:
+                needs_review = True
+                review_reason = "Zero verifiable evidence quotes extracted"
+            elif loc_conf < 0.3:
+                needs_review = True
+                review_reason = "Geographic location ambiguous or unverified"
+            elif is_third_person:
+                needs_review = True
+                review_reason = "Third-person discussion signal detected"
+
         return {
             "purchase_intent_score": p_intent,
             "residential_confidence": res_conf,
             "location_confidence": loc_conf,
             "freshness_score": fresh_score,
-            "evidence_confidence": ev_conf
+            "evidence_confidence": ev_conf,
+            "composite_qualification_score": Q,
+            "hard_disqualified": hard_disqualified,
+            "disqualification_reason": disqualification_reason,
+            "needs_human_review": needs_review,
+            "review_reason": review_reason
         }
 
     def extract_dates_and_freshness(self, soup: BeautifulSoup, text: str) -> Tuple[str, Optional[str], Optional[str]]:
@@ -694,6 +751,62 @@ class ContentParser:
 
         return LeadCategory.NON_BUYER.value
 
+    def extract_structured_evidence(
+        self,
+        combined_text: str,
+        matched_keywords: List[str],
+        evidence_snippets: List[str],
+        published_str: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Builds structured, auditable evidence records with extraction provenance.
+        """
+        records = []
+        for snippet in evidence_snippets:
+            ev_type = "PURCHASE_INTENT"
+            polarity = "POSITIVE"
+            weight = 3.0
+            s_lower = snippet.lower()
+            if "comparing quotes" in s_lower or "proposal" in s_lower:
+                ev_type = "QUOTE_COMPARISON"
+                weight = 4.0
+            elif "bill" in s_lower or "electric" in s_lower:
+                ev_type = "BILL_PAIN_POINT"
+                weight = 3.0
+            elif "price signal" in s_lower or "/watt" in s_lower:
+                ev_type = "PRICE_PER_WATT"
+                weight = 4.0
+            elif "negat" in s_lower or "not looking" in s_lower or "not interested" in s_lower:
+                ev_type = "NEGATION"
+                polarity = "NEGATIVE"
+                weight = -8.0
+            elif "hypothetical" in s_lower:
+                ev_type = "HYPOTHETICAL"
+                polarity = "NEUTRAL"
+                weight = -3.0
+            elif "expansion" in s_lower or "upgrade" in s_lower or "storage" in s_lower:
+                ev_type = "SYSTEM_UPGRADE"
+                weight = 5.0
+            elif "repair" in s_lower or "inverter" in s_lower:
+                ev_type = "REPAIR_SERVICE"
+                weight = 4.0
+
+            clean_text = snippet
+            if ":" in snippet:
+                clean_text = snippet.split(":", 1)[1].strip().strip('"')
+
+            records.append({
+                "evidence_text": clean_text,
+                "evidence_type": ev_type,
+                "evidence_polarity": polarity,
+                "published_at": published_str,
+                "extraction_method": "RULE_REGEX_V2",
+                "model_version": "2.0.0",
+                "confidence": 0.95 if polarity == "POSITIVE" else 0.85,
+                "score_contribution": weight
+            })
+        return records
+
     def build_and_save_lead(
         self,
         url: str,
@@ -784,8 +897,9 @@ class ContentParser:
 
         lead_category = self.determine_lead_category(score, classification, buyer_intent_freshness)
         buyer_stage = self.extract_buyer_stage(classification, title, visible_text)
+        is_hypo = any(h in visible_text.lower() for h in HYPOTHETICAL_SIGNALS)
 
-        # Multi-Dimensional Qualification Dimensions
+        # Multi-Dimensional Qualification Dimensions with Standardized Formula Q
         qual_dims = self.calculate_qualification_dimensions(
             score=score,
             classification=classification,
@@ -794,8 +908,32 @@ class ContentParser:
             evidence_snippets=evidence_snippets,
             state=state,
             zip_code=zip_code,
-            intent_age_days=intent_age_days
+            intent_age_days=intent_age_days,
+            buyer_stage=buyer_stage,
+            is_hypothetical=is_hypo
         )
+
+        # Structured Evidence Records with Provenance & Timestamp Tracking
+        structured_evidence = self.extract_structured_evidence(
+            combined_text=f"{title}\n{visible_text}",
+            matched_keywords=matched_keywords,
+            evidence_snippets=evidence_snippets,
+            published_str=published_str
+        )
+
+        # Lifecycle & Qualification Routing (Hard Gates & Review Queue)
+        if qual_dims["hard_disqualified"]:
+            lead_status = "DISQUALIFIED"
+            qual_status = QualificationStatus.DISQUALIFIED.value
+        elif qual_dims["needs_human_review"]:
+            lead_status = LeadLifecycleStatus.PENDING_REVIEW.value
+            qual_status = QualificationStatus.PENDING_REVIEW.value
+        elif qual_dims["composite_qualification_score"] >= 60.0:
+            lead_status = LeadLifecycleStatus.QUALIFIED.value
+            qual_status = QualificationStatus.QUALIFIED.value
+        else:
+            lead_status = LeadLifecycleStatus.NEW.value
+            qual_status = QualificationStatus.QUALIFIED.value if score >= 4.0 else QualificationStatus.DISQUALIFIED.value
 
         # Solar Opportunity Estimation
         opportunity = SolarOpportunityEstimator.estimate_opportunity(
@@ -830,8 +968,14 @@ class ContentParser:
             "location_confidence": qual_dims["location_confidence"],
             "freshness_score": qual_dims["freshness_score"],
             "evidence_confidence": qual_dims["evidence_confidence"],
-            "lead_status": LeadLifecycleStatus.NEW.value,
-            "qualification_status": QualificationStatus.QUALIFIED.value if lead_category != LeadCategory.NON_BUYER.value else QualificationStatus.DISQUALIFIED.value,
+            "composite_qualification_score": qual_dims["composite_qualification_score"],
+            "hard_disqualified": qual_dims["hard_disqualified"],
+            "disqualification_reason": qual_dims["disqualification_reason"],
+            "needs_human_review": qual_dims["needs_human_review"],
+            "review_reason": qual_dims["review_reason"],
+            "structured_evidence": structured_evidence,
+            "lead_status": lead_status,
+            "qualification_status": qual_status,
             "property_type": property_type,
             "country": "USA",
             "state": state,
@@ -1028,22 +1172,23 @@ class ContentParser:
         title = soup.title.string.strip() if soup.title and soup.title.string else ""
         visible_text = self._extract_clean_text(html, soup)
 
-        # Content Deduplication
+        # Content Deduplication (Atomic & Concurrency-Safe)
         exact_hash = Deduplicator.hash_content_exact(visible_text)
-        if self.storage.is_exact_content_seen(exact_hash):
-            logger.info(f"[Parser Discarded] Exact duplicate content hash: {url}")
+        simhash = Deduplicator.compute_simhash(visible_text)
+
+        # Atomic insert eliminates race condition between concurrent parser workers
+        is_new_exact = self.storage.save_content_hash_atomic(exact_hash, simhash, url, title)
+        if not is_new_exact:
+            logger.info(f"[Parser Discarded] Exact duplicate content hash (atomic): {url}")
             self.storage.update_source_metrics(domain=domain, pages_downloaded=1, leads_found=0, duplicates=1)
             return {"is_duplicate": True, "duplicate_type": "exact", "outbound_links": [], "solar_lead": None}
 
-        simhash = Deduplicator.compute_simhash(visible_text)
         near_duplicate = self.storage.check_near_duplicate_simhash(simhash, max_hamming_distance=3)
         if near_duplicate:
             dup_url, dist = near_duplicate
             logger.info(f"[Parser Discarded] Near-duplicate of {dup_url} (Hamming Dist: {dist}): {url}")
             self.storage.update_source_metrics(domain=domain, pages_downloaded=1, leads_found=0, duplicates=1)
             return {"is_duplicate": True, "duplicate_type": "simhash", "outbound_links": [], "solar_lead": None}
-
-        self.storage.save_content_hash(exact_hash, simhash, url, title)
 
         # Determine thread vs index page
         is_discussion = self._is_discussion_thread(url)

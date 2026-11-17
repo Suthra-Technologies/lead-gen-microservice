@@ -292,12 +292,18 @@ SOLAR_INTENT_WEIGHTS = {
     "solar installation quote": 5.0,
     "looking for a solar installer": 5.0,
     "looking for solar installer": 5.0,
+    "looking for solar installers": 5.0,
+    "looking for recommended solar installers": 5.0,
+    "recommended solar installers": 5.0,
+    "recommended installers": 4.5,
     "installer recommendation": 5.0,
     "installer recommendations": 5.0,
     "can anyone recommend a solar installer": 5.0,
     "recommend an installer": 5.0,
     "recommend a solar installer": 5.0,
     "requesting solar quotes": 5.0,
+    "need solar proposals": 5.0,
+    "need to go solar": 4.0,
     
     # Active Quote Comparison / Review Signals (+4 to +4.5)
     "comparing two solar proposals": 4.5,
